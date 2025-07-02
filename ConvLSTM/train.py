@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import precision_score, recall_score, f1_score
 from skimage import metrics
 from scipy.spatial import distance
+from sklearn.model_selection import KFold
 import re
 import csv
 
@@ -268,7 +269,6 @@ def sequence_temporal_loss(pred_seq, target_seq, lambda_temp=0.1, combo_alpha=0.
     total_loss = combo_loss + temporal_smoothness
     return total_loss
 
-
 def iou_metric(pred, target, threshold=0.5, eps=1e-6):
     pred_bin = (pred > threshold).float()
     target_bin = (target > threshold).float()
@@ -277,86 +277,9 @@ def iou_metric(pred, target, threshold=0.5, eps=1e-6):
     iou = (intersection + eps) / (union + eps)
     return iou.mean()
 
-def train_conv_lstm_many_to_many(model, train_loader, test_loader, num_epochs=20, lr=1e-3, device='cuda', checkpoint_dir='checkpoints', graph_dir='./training_graphs', K=5, save_path='best_model_ConvLSTM.pth'):
- 
-    data_csv = [['K', 'Epoch', 'Loss', 'IoU']]
-    for k in range(K):
-        print(f'------------ FOLD {k} -----------')
-        model = ConvLSTMNetManyToMany(input_channels=1, hidden_channels=32)
-        model = model.to(device)
-        optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-        best_iou = 0.0
-        estacionamiento = 0
-        
-        losses, ious = [], []
-
-        for epoch in range(num_epochs):
-            model.train()
-            train_loss = 0
-            for input_seq, target_seq in train_loader:
-                input_seq = input_seq.to(device)
-                target_seq = target_seq.to(device)
-
-                output_seq = model(input_seq)
-                loss = sequence_temporal_loss(output_seq, target_seq)
-
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
-                train_loss += loss.item()
-
-            # Validation con test_loader
-            model.eval()
-            total_iou = 0
-            with torch.no_grad():
-                for input_seq, target_seq in test_loader:
-                    input_seq = input_seq.to(device)
-                    target_seq = target_seq.to(device)
-                    pred_seq = model(input_seq)
-                    iou = iou_metric(pred_seq, target_seq)
-                    total_iou += iou.item()
-
-            avg_iou = total_iou / len(test_loader)
-            avg_loss = train_loss/len(train_loader)
-
-            print(f"Fold: {k} - Epoch: {epoch+1}/{num_epochs} - Train Loss: {avg_loss:.4f} - Val IoU: {avg_iou:.4f}")
-
-            losses.append(avg_loss)
-            ious.append(avg_iou)
-            data_csv.append([k, epoch+1, avg_loss, avg_iou])
-
-            if avg_iou > best_iou:
-                best_iou = avg_iou
-                best_epoch = epoch + 1
-                checkpoint_path = os.path.join(checkpoint_dir, save_path)
-                torch.save({
-                    'epoch': best_epoch,
-                    'model_state_dict': model.state_dict(),
-                    'optimizer_state_dict': optimizer.state_dict(),
-                    'best_iou': best_iou,
-                }, checkpoint_path)
-                print(f"Checkpoint guardado en epoch {best_epoch} con IoU: {best_iou:.4f}")
-                estacionamiento = 0
-            
-            estacionamiento += 1
-            if estacionamiento >= 20:
-                break
-        # Graficar la pérdida a lo largo de las épocas
-        plt.figure(figsize=(10, 5))
-        plt.plot(losses, marker='o', linestyle='--', label='Training losses', color='#e63a22', lw=3)
-        plt.plot(ious, marker='x', linestyle='-.', label='IoU validation', color='#60ca23', lw=3)
-        plt.xlabel('Epoch')
-        plt.ylabel('Metric Value')
-        plt.title('Training Loss & IoU Validation Over Epochs')
-        plt.grid(True, ls='--', alpha=0.5, color='lightgray')
-        plt.legend()
-        plt.savefig(f'{graph_dir}/loss_iou_epochs_K_{k}_{ckpt_id}.png')
-        plt.show()
-    return data_csv
-
 sequence_length = 4
-model_description = 'UNet_ConvLSTM'
-ckpt_id = '30_abril_2025'
+model_description = 'model_description'
+ckpt_id = 'ckpt_id'
 
 train_input_dir = os.path.join(dataset_path, f'train_outputs/{ckpt_id}')
 train_mask_dir = os.path.join(dataset_path, f'train_masks')
@@ -365,12 +288,6 @@ test_mask_dir = os.path.join(dataset_path, f'test_masks')
 
 train_inputs, train_targets = generate_input_target_sequences(train_input_dir, train_mask_dir, sequence_length)
 test_inputs, test_targets = generate_input_target_sequences(test_input_dir, test_mask_dir, sequence_length)
-
-train_dataset = ConvLSTMDataset(train_inputs, train_targets)
-test_dataset = ConvLSTMDataset(test_inputs, test_targets)
-
-train_loader = DataLoader(train_dataset, batch_size=4, shuffle=False, num_workers=2)
-test_loader = DataLoader(test_dataset, batch_size=4, shuffle=False, num_workers=2)
 
 print(f"Secuencias de entrenamiento: {len(train_inputs)}")
 print(f"Targets de entrenamiento: {len(train_targets)}")
@@ -391,8 +308,103 @@ os.makedirs(graph_dir, exist_ok=True)
 # File path for the CSV file
 csv_file_path = f'{path_root}results_{model_description}_{fecha}.csv'
 
-data_csv = train_conv_lstm_many_to_many(model, train_loader, test_loader, num_epochs=100, device='cuda', checkpoint_dir=checkpoint_dir, graph_dir=graph_dir, K=5)
+# Definir K folds
+K = 5
+kf = KFold(n_splits=K, shuffle=True, random_state=random_state)
+folds = list(kf.split(train_inputs))
 
+data_csv = [['K', 'Epoch', 'Loss', 'IoU']]
+
+# Entrenamiento con validación cruzada
+for fold_idx, (train_idx, val_idx) in enumerate(folds):
+    print(f"\n------------ FOLD {fold_idx + 1} / {K} -----------")
+
+    fold_train_inputs = [train_inputs[i] for i in train_idx]
+    fold_train_targets = [train_targets[i] for i in train_idx]
+    fold_val_inputs = [train_inputs[i] for i in val_idx]
+    fold_val_targets = [train_targets[i] for i in val_idx]
+
+    train_dataset = ConvLSTMDataset(fold_train_inputs, fold_train_targets)
+    val_dataset = ConvLSTMDataset(fold_val_inputs, fold_val_targets)
+
+    train_loader = DataLoader(train_dataset, batch_size=4, shuffle=True, num_workers=2)
+    val_loader = DataLoader(val_dataset, batch_size=4, shuffle=False, num_workers=2)
+
+    # Crear nuevo modelo por fold
+    model = ConvLSTMNetManyToMany(input_channels=1, hidden_channels=32)
+    model = model.to('cuda')
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+
+    best_iou = 0.0
+    estacionamiento = 0
+    losses, ious = [], []
+
+    for epoch in range(100):  # num_epochs
+        model.train()
+        train_loss = 0
+        for input_seq, target_seq in train_loader:
+            input_seq = input_seq.to('cuda')
+            target_seq = target_seq.to('cuda')
+
+            output_seq = model(input_seq)
+            loss = sequence_temporal_loss(output_seq, target_seq)
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            train_loss += loss.item()
+
+        # Validación
+        model.eval()
+        total_iou = 0
+        with torch.no_grad():
+            for input_seq, target_seq in val_loader:
+                input_seq = input_seq.to('cuda')
+                target_seq = target_seq.to('cuda')
+                pred_seq = model(input_seq)
+                iou = iou_metric(pred_seq, target_seq)
+                total_iou += iou.item()
+
+        avg_iou = total_iou / len(val_loader)
+        avg_loss = train_loss / len(train_loader)
+
+        print(f"Fold: {fold_idx + 1} - Epoch: {epoch+1}/100 - Train Loss: {avg_loss:.4f} - Val IoU: {avg_iou:.4f}")
+        losses.append(avg_loss)
+        ious.append(avg_iou)
+        data_csv.append([fold_idx + 1, epoch + 1, avg_loss, avg_iou])
+
+        # Guardar el mejor modelo
+        if avg_iou > best_iou:
+            best_iou = avg_iou
+            best_epoch = epoch + 1
+            checkpoint_path = os.path.join(checkpoint_dir, f"best_model_fold_{fold_idx + 1}.pth")
+            torch.save({
+                'epoch': best_epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'best_iou': best_iou,
+            }, checkpoint_path)
+            print(f"Checkpoint guardado en epoch {best_epoch} con IoU: {best_iou:.4f}")
+            estacionamiento = 0
+        else:
+            estacionamiento += 1
+
+        if estacionamiento >= 20:
+            break
+
+    # Gráfica por fold
+    plt.figure(figsize=(10, 5))
+    plt.plot(losses, marker='o', linestyle='--', label='Training losses', color='#e63a22', lw=3)
+    plt.plot(ious, marker='x', linestyle='-.', label='IoU validation', color='#60ca23', lw=3)
+    plt.xlabel('Epoch')
+    plt.ylabel('Metric Value')
+    plt.title(f'Fold {fold_idx + 1}: Training Loss & IoU Validation')
+    plt.grid(True, ls='--', alpha=0.5, color='lightgray')
+    plt.legend()
+    plt.savefig(f'{graph_dir}/loss_iou_epochs_K_{fold_idx + 1}_{ckpt_id}.png')
+    plt.close()
+
+# Guardar CSV
 with open(csv_file_path, 'w', newline='') as csvfile:
     csvwriter = csv.writer(csvfile)
     csvwriter.writerows(data_csv)
