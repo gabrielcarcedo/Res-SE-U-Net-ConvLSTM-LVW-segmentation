@@ -14,3 +14,9 @@ The proposed approach performs segmentation in two stages:
    - A recurrent module that refines the segmentation masks by capturing temporal coherence across frame sequences.
 
 ---
+
+#### The pipeline was validated using 5-fold cross-validation and evaluated with standard segmentation metrics:
+- IoU (Intersection over Union)
+- Dice Coefficient
+- Precision, Recall, F1-Score
+#### For final test performance and reproducibility, refer to the manuscript results section.
