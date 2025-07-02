@@ -79,7 +79,7 @@ def save_image(tensor, filename):
     pil_image.save(filename)
 
 # Validación cruzada K-Fold
-kf = KFold(n_splits=5, shuffle=True, random_state=42)
+kf = KFold(n_splits=5, shuffle=True, random_state=random_state)
 best_model_iou = 0.0
 best_k = 0
 best_ckpt_id = ''
