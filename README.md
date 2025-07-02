@@ -14,6 +14,3 @@ The proposed approach performs segmentation in two stages:
    - A recurrent module that refines the segmentation masks by capturing temporal coherence across frame sequences.
 
 ---
-
-## Repository Structure
-
